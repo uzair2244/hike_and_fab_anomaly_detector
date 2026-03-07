@@ -49,7 +49,8 @@ const formatCompact = (num) =>
 // --- Helpers: Promise wrapper for HTTPS GET (Binance REST) ---
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    const agent = process.env.PROXY_URL ? new SocksProxyAgent(process.env.PROXY_URL) : ipv4Agent;
+    https.get(url, { agent }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -143,6 +144,10 @@ async function computeMultiTfFib(symbol) {
     const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${tf.interval}&limit=${tf.lookback}`;
     try {
       const klines = await fetchJson(url);
+      if (!Array.isArray(klines)) {
+        console.error(`Invalid response for ${symbol} ${tf.interval}: not an array`);
+        continue;
+      }
       const { high, low } = findSwingHighLow(klines, tf.lookback);
       const fib = fibonacciLevels(low, high);
       results[tf.interval] = { high, low, fib, klines };
@@ -516,6 +521,11 @@ async function startEmaTrackerShort(symbol) {
   try {
     const klinesUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&limit=100`;
     const klines = await fetchJson(klinesUrl);
+    if (!Array.isArray(klines)) {
+      console.error(`Invalid klines response for ${symbol}: not an array`);
+      activeTrackers.delete(symbol);
+      return;
+    }
     const closes = klines.map(k => parseFloat(k[4]));
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let highestPriceSeen = Math.max(...klines.map(k => parseFloat(k[2])));
@@ -595,6 +605,11 @@ async function startEmaTrackerLong(symbol) {
   try {
     const klinesUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=5m&limit=100`;
     const klines = await fetchJson(klinesUrl);
+    if (!Array.isArray(klines)) {
+      console.error(`Invalid klines response for ${symbol}: not an array`);
+      activeTrackers.delete(symbol);
+      return;
+    }
     const closes = klines.map(k => parseFloat(k[4]));
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let lowestPriceSeen = Math.min(...klines.map(k => parseFloat(k[3])));
