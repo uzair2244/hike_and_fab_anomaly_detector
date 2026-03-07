@@ -767,7 +767,9 @@ async function processSignals() {
 
 // --- Binance WebSocket (Direct) ---
 function initWebSocket() {
-  const ws = new WebSocket(WS_URL);
+  const ws = new WebSocket(WS_URL, {
+    agent: ipv4Agent
+  });
 
   ws.on('message', async (data) => {
     try {
