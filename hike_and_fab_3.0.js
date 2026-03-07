@@ -23,6 +23,11 @@ const ipv4Agent = new https.Agent({
   family: 4
 });
 
+// --- Get WebSocket agent (proxy or default) ---
+function getWsAgent() {
+  return process.env.PROXY_URL ? new SocksProxyAgent(process.env.PROXY_URL) : undefined;
+}
+
 const bot = new Telegraf(TELEGRAM_TOKEN, {
   telegram: {
     agent: ipv4Agent
@@ -530,7 +535,9 @@ async function startEmaTrackerShort(symbol) {
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let highestPriceSeen = Math.max(...klines.map(k => parseFloat(k[2])));
 
-    const wsKline = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_5m`);
+    const wsKline = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_5m`, {
+      agent: getWsAgent()
+    });
     let entrySignaled = false;
 
     wsKline.on('message', async (msg) => {
@@ -614,7 +621,9 @@ async function startEmaTrackerLong(symbol) {
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let lowestPriceSeen = Math.min(...klines.map(k => parseFloat(k[3])));
 
-    const wsKline = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_5m`);
+    const wsKline = new WebSocket(`wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@kline_5m`, {
+      agent: getWsAgent()
+    });
     let entrySignaled = false;
 
     wsKline.on('message', async (msg) => {
@@ -783,9 +792,8 @@ async function processSignals() {
 
 // --- Binance WebSocket (Direct) ---
 function initWebSocket() {
-  const agent = process.env.PROXY_URL ? new SocksProxyAgent(process.env.PROXY_URL) : ipv4Agent;
   const ws = new WebSocket(WS_URL, {
-    agent
+    agent: getWsAgent()
   });
 
   ws.on('message', async (data) => {
