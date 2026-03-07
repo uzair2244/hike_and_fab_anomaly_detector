@@ -9,7 +9,7 @@
 const { Telegraf } = require('telegraf');
 const WebSocket = require('ws');
 const https = require('https');
-const { HttpsProxyAgent } = require('https-proxy-agent');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 
 // ================= CONFIG =================
 const TELEGRAM_TOKEN = '7356098566:AAG2mE31mK-6reE0xoHeOiTuefZOMFBJQaE';
@@ -768,7 +768,7 @@ async function processSignals() {
 
 // --- Binance WebSocket (Direct) ---
 function initWebSocket() {
-  const agent = process.env.PROXY_URL ? new HttpsProxyAgent(process.env.PROXY_URL) : ipv4Agent;
+  const agent = process.env.PROXY_URL ? new SocksProxyAgent(process.env.PROXY_URL) : ipv4Agent;
   const ws = new WebSocket(WS_URL, {
     agent
   });
