@@ -1,0 +1,24 @@
+{
+  "name": "nexus-be",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "service.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "dependencies": {
+    "agentkeepalive": "^4.6.0",
+    "axios": "^1.13.6",
+    "axios-retry": "^4.5.0",
+    "dotenv": "^17.3.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "socks-proxy-agent": "^8.0.5",
+    "technicalindicators": "^3.1.0",
+    "telegraf": "^4.16.3",
+    "ws": "^8.19.0"
+  }
+}
