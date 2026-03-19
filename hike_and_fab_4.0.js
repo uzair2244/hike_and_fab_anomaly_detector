@@ -19,7 +19,7 @@ const CHAT_ID = process.env.CHAT_ID || 'xxxxxx';
 
 const MEXC_WS_URL  = 'wss://wbs.mexc.com/ws';
 const MEXC_REST    = 'https://api.mexc.com';
-const PING_INTERVAL_MS   = 20_000;  // MEXC requires ping every <30s
+const PING_INTERVAL_MS   = 15_000;  // MEXC requires ping every <30s
 const TRACKER_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2h per tracker
 // =========================================
 
@@ -89,9 +89,11 @@ function createMexcWs(subscriptions, onMessage, label) {
 
     ws.on('open', () => {
       console.log(`✅ WS connected [${label}]`);
-      // Subscribe
+
+      // Subscribe to streams
       ws.send(JSON.stringify({ method: 'SUBSCRIPTION', params: subscriptions }));
-      // Keepalive ping
+
+      // MEXC keepalive — must ping every <30s or server drops connection
       pingTimer = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ method: 'PING' }));
@@ -101,25 +103,46 @@ function createMexcWs(subscriptions, onMessage, label) {
 
     ws.on('message', (raw) => {
       try {
-        const msg = JSON.parse(raw);
-        // Ignore pong / subscription confirmations
-        if (msg.msg === 'PONG' || msg.code !== undefined) return;
+        const text = raw.toString();
+
+        // MEXC sometimes sends plain string "ping" — respond immediately
+        if (text === 'ping') {
+          if (ws.readyState === WebSocket.OPEN) ws.send('pong');
+          return;
+        }
+
+        const msg = JSON.parse(text);
+
+        // Respond to server-initiated JSON ping
+        if (msg.method === 'PING' || msg.ping) {
+          if (ws.readyState === WebSocket.OPEN)
+            ws.send(JSON.stringify({ method: 'PONG' }));
+          return;
+        }
+
+        // Ignore our own pong replies and subscription ACKs
+        if (msg.method === 'PONG' || msg.msg === 'PONG' || msg.id !== undefined) return;
+
         onMessage(msg);
       } catch (e) {
         // ignore malformed frames
       }
     });
 
-    ws.on('close', () => {
-      console.warn(`⚠️  WS closed [${label}], reconnecting in 5s...`);
+    ws.on('close', (code, reason) => {
       clearInterval(pingTimer);
+      const why = reason?.toString() || 'no reason';
+      console.warn(`⚠️  WS closed [${label}] code=${code} reason="${why}", reconnecting in 5s...`);
       if (!dead) setTimeout(connect, 5000);
     });
 
     ws.on('error', (err) => {
       console.error(`❌ WS error [${label}]:`, err.message);
-      try { ws.terminate(); } catch (_) {}
+      // 'close' fires after 'error' — let it handle reconnect
     });
+
+    // TCP-level ping frame — respond with pong to keep socket alive
+    ws.on('ping', () => { try { ws.pong(); } catch (_) {} });
   }
 
   connect();
