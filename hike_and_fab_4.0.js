@@ -1,10 +1,9 @@
 /**
  * Nexus Moonshot & Dump Detector + SHORT/LONG Entry Trackers
- * MEXC WebSocket version — real-time, Railway-compatible (no Binance geo-block)
+ * Hybrid: REST polling for tickers, MEXC WebSocket for per-symbol kline trackers
  *
- * WS streams used:
- *   Tickers  → wss://wbs.mexc.com/ws  →  spot@public.miniTickers.v3.api
- *   Klines   → wss://wbs.mexc.com/ws  →  spot@public.kline.v3.api@{SYMBOL}@Min5
+ * - Ticker scan  → REST GET /api/v3/ticker/24hr  every 10s  (batch, stable)
+ * - Entry tracker→ wss://wbs.mexc.com/ws  spot@public.kline.v3.api@{SYM}@Min5
  *
  * Replace TELEGRAM_TOKEN and CHAT_ID with your values.
  */
@@ -19,7 +18,8 @@ const CHAT_ID = process.env.CHAT_ID || 'xxxxxx';
 
 const MEXC_WS_URL  = 'wss://wbs.mexc.com/ws';
 const MEXC_REST    = 'https://api.mexc.com';
-const PING_INTERVAL_MS   = 15_000;  // MEXC requires ping every <30s
+const TICKER_POLL_MS     = 10_000;  // REST ticker scan interval
+const PING_INTERVAL_MS   = 15_000;  // MEXC WS keepalive interval (must be <30s)
 const TRACKER_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2h per tracker
 // =========================================
 
@@ -71,6 +71,13 @@ async function fetchMexcKlines(symbol, interval, limit) {
   const klines = await fetchJson(url);
   if (!Array.isArray(klines)) throw new Error(`MEXC klines error: ${JSON.stringify(klines).slice(0, 200)}`);
   return klines; // oldest-first, same index layout as Binance
+}
+
+async function fetchMexcTickers() {
+  const url = `${MEXC_REST}/api/v3/ticker/24hr`;
+  const tickers = await fetchJson(url);
+  if (!Array.isArray(tickers)) throw new Error(`MEXC tickers error: ${JSON.stringify(tickers).slice(0, 200)}`);
+  return tickers;
 }
 
 // -------------------------------------------------------
@@ -681,39 +688,29 @@ async function startEmaTrackerLong(symbol) {
 }
 
 // -------------------------------------------------------
-// MAIN TICKER WS
-// Subscribes to spot@public.miniTickers.v3.api
-//
-// MEXC miniTicker message structure:
-//   msg.d.data → array of tickers with fields:
-//     s  = symbol (e.g. "BTCUSDT")
-//     p  = last price
-//     h  = 24h high
-//     l  = 24h low
-//     q  = 24h quote volume (USDT)
-//     r  = price change ratio as decimal (0.05 = +5%)
+// TICKER SCANNER — REST polling (stable, no WS geo-issues)
+// MEXC /api/v3/ticker/24hr fields (Binance-identical):
+//   symbol, lastPrice, highPrice, lowPrice, quoteVolume, priceChangePercent
 // -------------------------------------------------------
-function initTickerWs() {
-  createMexcWs(['spot@public.miniTickers.v3.api'], async (msg) => {
-    const tickers = msg?.d?.data;
-    if (!Array.isArray(tickers)) return;
-
-    let updated = 0;
-    for (const t of tickers) {
-      if (!t.s || !t.s.endsWith('USDT')) continue;
-      state.tickers[t.s] = {
-        symbol:    t.s,
-        price:     parseFloat(t.p),
-        high:      parseFloat(t.h),
-        low:       parseFloat(t.l),
-        volume:    parseFloat(t.q),
-        change24h: parseFloat(t.r) * 100   // decimal → percent
+async function pollTickers() {
+  try {
+    const list = await fetchMexcTickers();
+    for (const t of list) {
+      if (!t.symbol || !t.symbol.endsWith('USDT')) continue;
+      state.tickers[t.symbol] = {
+        symbol:    t.symbol,
+        price:     parseFloat(t.lastPrice),
+        high:      parseFloat(t.highPrice),
+        low:       parseFloat(t.lowPrice),
+        volume:    parseFloat(t.quoteVolume),
+        change24h: parseFloat(t.priceChangePercent)
       };
-      updated++;
     }
-
-    if (updated > 0) await processSignals();
-  }, 'TICKERS');
+    console.log(`📊 Scanned ${Object.keys(state.tickers).length} USDT pairs`);
+    await processSignals();
+  } catch (err) {
+    console.error('❌ Ticker poll error:', err.message);
+  }
 }
 
 // -------------------------------------------------------
@@ -727,6 +724,10 @@ function initTickerWs() {
     console.error('❌ Telegram connection failed:', err.message);
   }
 
-  initTickerWs();
-  console.log('🚀 Nexus started — MEXC WebSocket (real-time, Railway-compatible)');
+  // Ticker scan via REST (reliable on Railway)
+  await pollTickers();
+  setInterval(pollTickers, TICKER_POLL_MS);
+
+  // Per-symbol kline trackers use MEXC WS (started on-demand when signal fires)
+  console.log('🚀 Nexus started — REST scanner + MEXC WS trackers (Railway-compatible)');
 })();
