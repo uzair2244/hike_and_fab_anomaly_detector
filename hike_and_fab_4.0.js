@@ -467,16 +467,46 @@ _Trend has broken above 5m 9-EMA!_
 }
 
 // -------------------------------------------------------
-// SIGNAL LOGIC  (unchanged)
+// SIGNAL LOGIC
 // -------------------------------------------------------
+
+// Track top movers each scan for visibility
+let _scanCount = 0;
+
 async function processSignals() {
-  for (const t of Object.values(state.tickers)) {
-    if (!t || t.high === t.low) continue;
+  const allTickers = Object.values(state.tickers).filter(t => t && t.high !== t.low);
+  _scanCount++;
+
+  // --- Every 6 scans (~1 min) print top 5 gainers and losers so we know data is live ---
+  if (_scanCount % 6 === 1) {
+    const sorted = [...allTickers].sort((a, b) => b.change24h - a.change24h);
+    const top5   = sorted.slice(0, 5).map(t => `${t.symbol} ${t.change24h.toFixed(1)}%`).join(' | ');
+    const bot5   = sorted.slice(-5).map(t => `${t.symbol} ${t.change24h.toFixed(1)}%`).join(' | ');
+    console.log(`📈 Top gainers : ${top5}`);
+    console.log(`📉 Top losers  : ${bot5}`);
+
+    // Also log any coins near moonshot/dump thresholds (within 2%)
+    const nearMoonshot = allTickers.filter(t => t.change24h > 10 && t.change24h <= 12);
+    const nearDump     = allTickers.filter(t => t.change24h < -10 && t.change24h >= -12);
+    if (nearMoonshot.length) console.log(`🔭 Near moonshot (10-12%): ${nearMoonshot.map(t => `${t.symbol} ${t.change24h.toFixed(1)}%`).join(' | ')}`);
+    if (nearDump.length)     console.log(`🔭 Near dump (-10 to -12%): ${nearDump.map(t => `${t.symbol} ${t.change24h.toFixed(1)}%`).join(' | ')}`);
+  }
+
+  for (const t of allTickers) {
     const rangePos   = (t.price - t.low) / (t.high - t.low);
     const isMoonshot = t.change24h > 12  && rangePos > 0.85;
     const isDump     = t.change24h < -12 && rangePos < 0.15;
 
+    // Log anything that clears the change threshold so we can see rangePos blocking it
+    if (t.change24h > 12 && !isMoonshot && !state.sentSignals.has(t.symbol)) {
+      console.log(`⚡ ${t.symbol} +${t.change24h.toFixed(2)}% but rangePos=${rangePos.toFixed(2)} (need >0.85) — skipped`);
+    }
+    if (t.change24h < -12 && !isDump && !state.sentSignals.has(t.symbol)) {
+      console.log(`⚡ ${t.symbol} ${t.change24h.toFixed(2)}% but rangePos=${rangePos.toFixed(2)} (need <0.15) — skipped`);
+    }
+
     if (isMoonshot && !state.sentSignals.has(t.symbol)) {
+      console.log(`🚀 MOONSHOT: ${t.symbol} +${t.change24h.toFixed(2)}% rangePos=${rangePos.toFixed(2)} price=$${t.price}`);
       state.sentSignals.add(t.symbol);
       t.confidence = 85 + Math.floor(Math.random() * 10);
       try {
@@ -493,6 +523,7 @@ async function processSignals() {
     }
 
     if (isDump && !state.sentSignals.has(t.symbol)) {
+      console.log(`🔻 DUMP: ${t.symbol} ${t.change24h.toFixed(2)}% rangePos=${rangePos.toFixed(2)} price=$${t.price}`);
       state.sentSignals.add(t.symbol);
       t.confidence = 85 + Math.floor(Math.random() * 10);
       try {
@@ -695,6 +726,7 @@ async function startEmaTrackerLong(symbol) {
 async function pollTickers() {
   try {
     const list = await fetchMexcTickers();
+    let usdt = 0;
     for (const t of list) {
       if (!t.symbol || !t.symbol.endsWith('USDT')) continue;
       state.tickers[t.symbol] = {
@@ -705,8 +737,22 @@ async function pollTickers() {
         volume:    parseFloat(t.quoteVolume),
         change24h: parseFloat(t.priceChangePercent)
       };
+      usdt++;
     }
-    console.log(`📊 Scanned ${Object.keys(state.tickers).length} USDT pairs`);
+
+    // Count how many pass each filter stage
+    const allValid   = Object.values(state.tickers).filter(t => t.high !== t.low);
+    const over12     = allValid.filter(t => t.change24h > 12);
+    const under12    = allValid.filter(t => t.change24h < -12);
+    const moonshotOk = over12.filter(t => (t.price - t.low) / (t.high - t.low) > 0.85);
+    const dumpOk     = under12.filter(t => (t.price - t.low) / (t.high - t.low) < 0.15);
+
+    console.log(
+      `📊 ${usdt} pairs | >12%: ${over12.length} | <-12%: ${under12.length} | ` +
+      `🚀 moonshot candidates: ${moonshotOk.length} | 🔻 dump candidates: ${dumpOk.length} | ` +
+      `active trackers: ${activeTrackers.size} | sent signals: ${state.sentSignals.size}`
+    );
+
     await processSignals();
   } catch (err) {
     console.error('❌ Ticker poll error:', err.message);
