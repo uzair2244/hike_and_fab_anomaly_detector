@@ -1,6 +1,6 @@
 /**
  * Nexus Moonshot & Dump Detector + SHORT/LONG Entry Trackers
- * Railway-compatible: REST polling via Bybit API (no WebSockets, no geo-block)
+ * Railway-compatible: REST polling via MEXC API (no WebSockets, no geo-block)
  *
  * Replace TELEGRAM_TOKEN and CHAT_ID with your values.
  */
@@ -56,38 +56,29 @@ function fetchJson(url) {
 }
 
 // -------------------------------------------------------
-// BYBIT API HELPERS
+// MEXC API HELPERS
 //
-// Bybit kline array format (same index layout as Binance):
-//   [0] startTime  [1] open  [2] high  [3] low  [4] close  [5] volume  [6] turnover
+// MEXC uses an API format identical to Binance — same endpoints,
+// same field names, same kline array indexes. Zero indicator changes needed.
 //
-// IMPORTANT: Bybit returns klines newest-first — we reverse before use
-//            so index 0 = oldest candle, matching Binance convention.
+// Kline array: [openTime, open, high, low, close, volume, closeTime, ...]
+//   [0]=openTime  [1]=open  [2]=high  [3]=low  [4]=close  [5]=volume
 // -------------------------------------------------------
 
-const BYBIT_INTERVAL_MAP = {
-  '1m':  '1',
-  '5m':  '5',
-  '15m': '15',
-  '1h':  '60',
-  '4h':  '240',
-  '1d':  'D'
-};
+const MEXC_BASE = 'https://api.mexc.com';
 
-async function fetchBybitKlines(symbol, interval, limit) {
-  const iv = BYBIT_INTERVAL_MAP[interval] || interval;
-  const url = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=${iv}&limit=${limit}`;
-  const res = await fetchJson(url);
-  if (res.retCode !== 0) throw new Error(`Bybit klines error ${res.retCode}: ${res.retMsg}`);
-  // Reverse so oldest candle is at index 0
-  return res.result.list.reverse();
+async function fetchMexcKlines(symbol, interval, limit) {
+  const url = `${MEXC_BASE}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  const klines = await fetchJson(url);
+  if (!Array.isArray(klines)) throw new Error(`MEXC klines error: ${JSON.stringify(klines)}`);
+  return klines; // already oldest-first, same as Binance
 }
 
-async function fetchBybitTickers() {
-  const url = 'https://api.bybit.com/v5/market/tickers?category=spot';
-  const res = await fetchJson(url);
-  if (res.retCode !== 0) throw new Error(`Bybit tickers error ${res.retCode}: ${res.retMsg}`);
-  return res.result.list;
+async function fetchMexcTickers() {
+  const url = `${MEXC_BASE}/api/v3/ticker/24hr`;
+  const tickers = await fetchJson(url);
+  if (!Array.isArray(tickers)) throw new Error(`MEXC tickers error: ${JSON.stringify(tickers)}`);
+  return tickers;
 }
 
 // --- Math / Indicators ---
@@ -163,7 +154,7 @@ async function computeMultiTfFib(symbol) {
   const results = {};
   for (const tf of tfs) {
     try {
-      const klines = await fetchBybitKlines(symbol, tf.interval, tf.lookback);
+      const klines = await fetchMexcKlines(symbol, tf.interval, tf.lookback);
       const { high, low } = findSwingHighLow(klines, tf.lookback);
       const fib = fibonacciLevels(low, high);
       results[tf.interval] = { high, low, fib, klines };
@@ -344,7 +335,7 @@ async function decideEntryAndRisk(symbol, currentPrice, ema9, highestPeak) {
 
 // --- Trade URL helper ---
 function tradeUrl(symbol) {
-  return `https://www.bybit.com/trade/spot/${symbol.replace('USDT', '')}/USDT`;
+  return `https://www.mexc.com/exchange/${symbol.replace('USDT', '')}_USDT`;
 }
 
 // --- Telegram Alerts ---
@@ -365,7 +356,7 @@ async function sendTelegramAlert(coin) {
 
 _Tracking 5m chart for trend breakdown (SHORT entry)..._
 
-[Trade on Bybit](${tradeUrl(coin.symbol)})
+[Trade on MEXC](${tradeUrl(coin.symbol)})
 `;
   try {
     await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
@@ -390,7 +381,7 @@ async function sendDumpAlert(coin) {
 
 _Tracking 5m chart for trend breakout (LONG entry)..._
 
-[Trade on Bybit](${tradeUrl(coin.symbol)})
+[Trade on MEXC](${tradeUrl(coin.symbol)})
 `;
   try {
     await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
@@ -413,7 +404,7 @@ _Trend has broken below 5m 9-EMA!_
 🎯 *Take Profit 2 (1:2):* $${formatPrice(tp2)}
 *Confidence:* ${confidence}%
 
-[Trade on Bybit](${tradeUrl(symbol)})
+[Trade on MEXC](${tradeUrl(symbol)})
 `;
   try {
     await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
@@ -436,7 +427,7 @@ _Trend has broken above 5m 9-EMA!_
 🎯 *Take Profit 2 (1:2):* $${formatPrice(tp2)}
 *Confidence:* ${confidence}%
 
-[Trade on Bybit](${tradeUrl(symbol)})
+[Trade on MEXC](${tradeUrl(symbol)})
 `;
   try {
     await bot.telegram.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown', disable_web_page_preview: true });
@@ -456,7 +447,7 @@ async function startEmaTrackerShort(symbol) {
   const startTime = Date.now();
 
   try {
-    const initialKlines = await fetchBybitKlines(symbol, '5m', 200);
+    const initialKlines = await fetchMexcKlines(symbol, '5m', 200);
     const closes = initialKlines.map(k => parseFloat(k[4]));
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let highestPriceSeen = Math.max(...initialKlines.map(k => parseFloat(k[2])));
@@ -472,7 +463,7 @@ async function startEmaTrackerShort(symbol) {
       }
 
       try {
-        const recent = await fetchBybitKlines(symbol, '5m', 5);
+        const recent = await fetchMexcKlines(symbol, '5m', 5);
         if (!recent || recent.length === 0) return;
 
         for (const k of recent) {
@@ -533,7 +524,7 @@ async function startEmaTrackerLong(symbol) {
   const startTime = Date.now();
 
   try {
-    const initialKlines = await fetchBybitKlines(symbol, '5m', 200);
+    const initialKlines = await fetchMexcKlines(symbol, '5m', 200);
     const closes = initialKlines.map(k => parseFloat(k[4]));
     let currentEma = calculateSeedEMAForPeriod(closes, 9);
     let lowestPriceSeen = Math.min(...initialKlines.map(k => parseFloat(k[3])));
@@ -549,7 +540,7 @@ async function startEmaTrackerLong(symbol) {
       }
 
       try {
-        const recent = await fetchBybitKlines(symbol, '5m', 5);
+        const recent = await fetchMexcKlines(symbol, '5m', 5);
         if (!recent || recent.length === 0) return;
 
         for (const k of recent) {
@@ -657,33 +648,33 @@ async function processSignals() {
 }
 
 // -------------------------------------------------------
-// TICKER POLLING via Bybit
+// TICKER POLLING via MEXC
 //
-// Bybit ticker fields used:
-//   symbol         → same format as Binance (BTCUSDT)
-//   lastPrice      → current price
-//   highPrice24h   → 24h high
-//   lowPrice24h    → 24h low
-//   turnover24h    → 24h volume in USDT (quote volume)
-//   price24hPcnt   → 24h change as decimal (0.05 = +5%) → multiply by 100
+// MEXC ticker fields (identical to Binance):
+//   symbol             → e.g. BTCUSDT
+//   lastPrice          → current price
+//   highPrice          → 24h high
+//   lowPrice           → 24h low
+//   quoteVolume        → 24h volume in USDT
+//   priceChangePercent → 24h change already as percent (5.0 = +5%)
 // -------------------------------------------------------
 async function pollTickers() {
   try {
-    const list = await fetchBybitTickers();
+    const list = await fetchMexcTickers();
 
     list.forEach((t) => {
       if (!t.symbol || !t.symbol.endsWith('USDT')) return;
       state.tickers[t.symbol] = {
         symbol:    t.symbol,
         price:     parseFloat(t.lastPrice),
-        high:      parseFloat(t.highPrice24h),
-        low:       parseFloat(t.lowPrice24h),
-        volume:    parseFloat(t.turnover24h),
-        change24h: parseFloat(t.price24hPcnt) * 100  // decimal → percent
+        high:      parseFloat(t.highPrice),
+        low:       parseFloat(t.lowPrice),
+        volume:    parseFloat(t.quoteVolume),
+        change24h: parseFloat(t.priceChangePercent)  // already in percent
       };
     });
 
-    console.log(`📊 Polled ${Object.keys(state.tickers).length} USDT tickers from Bybit`);
+    console.log(`📊 Polled ${Object.keys(state.tickers).length} USDT tickers from MEXC`);
     await processSignals();
   } catch (err) {
     console.error('❌ Ticker poll error:', err.message);
@@ -702,5 +693,5 @@ async function pollTickers() {
   await pollTickers();
   setInterval(pollTickers, TICKER_POLL_INTERVAL_MS);
 
-  console.log('🚀 Nexus started — Bybit API (Railway-compatible, no geo-block)');
+  console.log('🚀 Nexus started — MEXC API (Railway-compatible, no geo-block)');
 })();
