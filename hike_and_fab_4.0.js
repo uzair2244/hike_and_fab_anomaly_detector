@@ -41,18 +41,58 @@ const formatPrice = (price) =>
 const formatCompact = (num) =>
   Intl.NumberFormat('en-US', { notation: 'compact' }).format(num);
 
-// --- HTTPS GET wrapper ---
-function fetchJson(url) {
+// --- Binance host rotation (fallback for IP-blocked environments like Railway) ---
+const BINANCE_HOSTS = [
+  'api.binance.com',
+  'api1.binance.com',
+  'api2.binance.com',
+  'api3.binance.com'
+];
+let currentHostIdx = 0;
+
+function rotatePath(originalUrl) {
+  // Swap out just the host portion, keep the path intact
+  return originalUrl.replace('api.binance.com', BINANCE_HOSTS[currentHostIdx]);
+}
+
+function fetchJsonOnce(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, { agent: new https.Agent({ family: 4 }) }, (res) => {
+    const finalUrl = rotatePath(url);
+    https.get(finalUrl, { agent: new https.Agent({ family: 4 }) }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(e); }
+        try {
+          const parsed = JSON.parse(data);
+          // Binance returns { code: <negative>, msg: "..." } on errors
+          if (parsed && !Array.isArray(parsed) && typeof parsed.code === 'number' && parsed.code < 0) {
+            reject(new Error(`Binance API error ${parsed.code}: ${parsed.msg}`));
+          } else {
+            resolve(parsed);
+          }
+        } catch (e) {
+          // Likely got an HTML block/Cloudflare page instead of JSON
+          reject(new Error(`JSON parse failed on ${finalUrl} — possible IP block (got HTML?)`));
+        }
       });
     }).on('error', reject);
   });
+}
+
+// Tries all 4 hosts in round-robin before giving up
+async function fetchJson(url) {
+  let lastError;
+  for (let attempt = 0; attempt < BINANCE_HOSTS.length; attempt++) {
+    try {
+      return await fetchJsonOnce(url);
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️  [${BINANCE_HOSTS[currentHostIdx]}] failed (attempt ${attempt + 1}): ${err.message}`);
+      currentHostIdx = (currentHostIdx + 1) % BINANCE_HOSTS.length;
+      await new Promise(r => setTimeout(r, 600)); // brief pause before retry
+    }
+  }
+  throw lastError;
 }
 
 // --- Math / Indicators ---
@@ -672,9 +712,15 @@ async function processSignals() {
 async function pollTickers() {
   try {
     const url = 'https://api.binance.com/api/v3/ticker/24hr';
-    const tickers = await fetchJson(url);
+    const response = await fetchJson(url);
 
-    tickers.forEach((t) => {
+    // Log the raw response type so we can diagnose issues
+    if (!Array.isArray(response)) {
+      console.error('❌ Binance returned non-array response:', JSON.stringify(response).slice(0, 300));
+      return;
+    }
+
+    response.forEach((t) => {
       if (!t.symbol || !t.symbol.endsWith('USDT')) return;
       state.tickers[t.symbol] = {
         symbol: t.symbol,
