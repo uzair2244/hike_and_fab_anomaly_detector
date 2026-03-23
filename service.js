@@ -1,7 +1,7 @@
 // service.js
 // simple wrapper: require your main bot file and start a tiny HTTP health endpoint
 // require('./hike_and_fab_4.0.js'); // adjust path if your main file is named differently
-require('./FVG_mexcjs'); // adjust path if your main file is named differently
+require('./FVG_mexc.js'); // adjust path if your main file is named differently
 
 // optional health server so platform health checks succeed
 const express = require('express');
